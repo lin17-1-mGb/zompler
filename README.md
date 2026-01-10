@@ -2,6 +2,9 @@
 A raspberry pi rompler script (especially for broken Pimoroni Pirate Audio hat screen)
 🐒 Monkey MIDI Player
 
+# Video demo
+https://youtu.be/eCKjwiwQem0
+
 A high-performance Raspberry Pi MIDI player with an OLED interface and a real-time mobile web remote.
 ✨ Features
 
