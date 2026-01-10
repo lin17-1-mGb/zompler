@@ -1,0 +1,13 @@
+# MIDI and Sound engine
+mido
+pyfluidsynth
+
+# Web Server and Real-time Sync
+Flask
+Flask-SocketIO
+eventlet
+
+# Hardware / UI (If you use these)
+RPi.GPIO
+Pillow
+adafruit-circuitpython-ssd1306
