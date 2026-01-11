@@ -1,26 +1,34 @@
+
 import eventlet
 eventlet.monkey_patch() 
 
-from flask import Flask, render_template_string
-from flask_socketio import SocketIO
 import json, os, time
+from flask import Flask, render_template_string, send_from_directory
+from flask_socketio import SocketIO
 
-app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
-
-# Ensure these match the Main Script paths exactly
+# 1. DEFINE PATHS FIRST
 BASE_DIR = "/home/pi/midifileplayer"
 STATE_FILE = os.path.join(BASE_DIR, "monkey_state.json")
 
+app = Flask(__name__)
+# Removing explicit eventlet here often helps stability on Pi Zero 2W
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# 2. DEFINE ROUTES
+@app.route('/socket.io.js')
+def serve_socket_io():
+    return send_from_directory(BASE_DIR, 'socket.io.min.js')
+
 IS_BUSY = False
 
+# ... rest of your code and render_template_string ...
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
     <title>Monkey MIDI Remote</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="/socket.io.js"></script>
     <style>
         body { background: #111; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 0; overflow: hidden; }
         #status-bar { 
@@ -55,78 +63,113 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        var socket = io();
-        function sendCmd(name) { socket.emit('control', {btn: name}); }
+    // Using io() without parameters tells it to use the current URL and Port automatically
+    var socket = io({
+        transports: ['polling', 'websocket'],
+        upgrade: true,
+        reconnection: true,
+        reconnectionAttempts: Infinity, // Keep trying until the Pi wakes up
+        reconnectionDelay: 1000,        // Try every 1 second
+        timeout: 2000                  // Wait 2s before timing out an attempt
+    });
 
-        socket.on('state_update', function(data) {
-            if(!data) return;
-            document.getElementById('batt-text').innerText = data.battery || "0:00";
-            const modeEl = document.getElementById('mode-text');
-            const menuContainer = document.getElementById('menu-container');
-            
-            // 1. Header/Mode Logic
-            if (data.msg) {
-                modeEl.innerText = data.msg;
-                modeEl.style.color = "#ff4444";
-            } else {
-                modeEl.innerText = (data.mode || "MAIN").toUpperCase();
-                modeEl.style.color = data.is_eco ? "#fbff00" : "#00ff00";
-            }
+    function sendCmd(name) { 
+        socket.emit('control', {btn: name}); 
+    }
 
-            // 2. Specialized Screen Logic
-            let html = '';
-            
-            if (data.mode === "VOLUME") {
-                html = `
-                    <div style="padding: 40px;">
-                        <h2 style="color: #aaa;">MASTER VOLUME</h2>
-                        <div style="font-size: 5em; font-weight: bold; color: #00ff00;">${data.volume}%</div>
-                        <div class="bar-container">
-                            <div class="bar-fill" style="width: ${data.volume}%; background: #00ff00;"></div>
-                        </div>
-                    </div>`;
-            } 
-            else if (data.mode === "METRONOME") {
-                let statusColor = data.metronome_on ? "#00ff00" : "#ff4444";
-                let sel = parseInt(data.index);
-                html = `
-                    <div style="padding: 20px;">
-                        <h2 style="color: #aaa;">METRONOME</h2>
-                        <div style="padding: 10px; border-radius: 10px; ${sel === 0 ? 'border: 2px solid yellow; background: #222;' : ''}">
-                            <div style="font-size: 1.5em; color: ${statusColor}; font-weight: bold;">
-                                ${data.metronome_on ? "● ACTIVE" : "○ OFF"}
-                            </div>
-                        </div>
-                        <div style="margin-top: 15px; padding: 10px; border-radius: 10px; ${sel === 1 ? 'border: 2px solid #007bff; background: #222;' : ''}">
-                            <div style="font-size: 0.8em; color: #888;">TEMPO</div>
-                            <div style="font-size: 3em; font-weight: bold;">${data.bpm} <span style="font-size: 0.4em;">BPM</span></div>
-                        </div>
-                        <div style="margin-top: 15px; padding: 10px; border-radius: 10px; ${sel === 2 ? 'border: 2px solid #007bff; background: #222;' : ''}">
-                            <div style="font-size: 0.8em; color: #888;">CLICK VOLUME</div>
-                            <div style="font-size: 2em; font-weight: bold; color: #007bff;">${data.metro_vol}</div>
-                            <div class="bar-container" style="width: 60%;">
-                                <div class="bar-fill" style="width: ${(data.metro_vol/127)*100}%"></div>
-                            </div>
-                        </div>
-                    </div>`;
-            }
-            else {
-                // Default Menu List Logic
-                (data.files || []).forEach((item, i) => {
-                    let isSel = (parseInt(i) === parseInt(data.index));
-                    let style = isSel ? 'background: #007bff; color: white; font-weight: bold; border-left: 8px solid yellow;' : 'color: #888;';
-                    html += `<div id="item-${i}" class="menu-item" style="${style}">${item}</div>`;
-                });
-            }
+    // Triggered the very second the Pi and Phone shake hands
+    socket.on('connect', function() {
+        console.log("Websocket Connected!");
+        const modeEl = document.getElementById('mode-text');
+        if (modeEl && modeEl.innerText === "CONNECTING...") {
+            modeEl.innerText = "LOADING DATA...";
+        }
+    });
 
-            menuContainer.innerHTML = html;
+    socket.on('state_update', function(data) {
+        if(!data) return;
 
-            if (data.mode !== "VOLUME" && data.mode !== "METRONOME") {
-                const active = document.getElementById(`item-${data.index}`);
-                if (active) active.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            }
-        });
-    </script>
+        // --- SAFETY: HIDE OVERLAY IF IT EXISTS ---
+        // If you have a <div> with id="overlay", this hides it.
+        const overlay = document.getElementById('overlay');
+        if(overlay) overlay.style.display = 'none';
+
+        // 1. Update Battery
+        document.getElementById('batt-text').innerText = data.battery || "0:00";
+        
+        const modeEl = document.getElementById('mode-text');
+        const menuContainer = document.getElementById('menu-container');
+        
+        // 2. Header/Mode Logic
+        // This overwrites "CONNECTING..." with the actual state from the Pi
+        if (data.msg) {
+            modeEl.innerText = data.msg;
+            modeEl.style.color = "#ff4444";
+        } else {
+            modeEl.innerText = (data.mode || "MAIN").toUpperCase();
+            modeEl.style.color = data.is_eco ? "#fbff00" : "#00ff00";
+        }
+
+        // 3. Specialized Screen Logic
+        let html = '';
+        
+        if (data.mode === "VOLUME") {
+            html = `
+                <div style="padding: 40px;">
+                    <h2 style="color: #aaa;">MASTER VOLUME</h2>
+                    <div style="font-size: 5em; font-weight: bold; color: #00ff00;">${data.volume}%</div>
+                    <div class="bar-container">
+                        <div class="bar-fill" style="width: ${data.volume}%; background: #00ff00;"></div>
+                    </div>
+                </div>`;
+        } 
+        else if (data.mode === "METRONOME") {
+            let statusColor = data.metronome_on ? "#00ff00" : "#ff4444";
+            let sel = parseInt(data.index);
+            html = `
+                <div style="padding: 20px;">
+                    <h2 style="color: #aaa;">METRONOME</h2>
+                    <div style="padding: 10px; border-radius: 10px; ${sel === 0 ? 'border: 2px solid yellow; background: #222;' : ''}">
+                        <div style="font-size: 1.5em; color: ${statusColor}; font-weight: bold;">
+                            ${data.metronome_on ? "● ACTIVE" : "○ OFF"}
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px; padding: 10px; border-radius: 10px; ${sel === 1 ? 'border: 2px solid #007bff; background: #222;' : ''}">
+                        <div style="font-size: 0.8em; color: #888;">TEMPO</div>
+                        <div style="font-size: 3em; font-weight: bold;">${data.bpm} <span style="font-size: 0.4em;">BPM</span></div>
+                    </div>
+                    <div style="margin-top: 15px; padding: 10px; border-radius: 10px; ${sel === 2 ? 'border: 2px solid #007bff; background: #222;' : ''}">
+                        <div style="font-size: 0.8em; color: #888;">CLICK VOLUME</div>
+                        <div style="font-size: 2em; font-weight: bold; color: #007bff;">${data.metro_vol}</div>
+                        <div class="bar-container" style="width: 60%;">
+                            <div class="bar-fill" style="width: ${(data.metro_vol/127)*100}%"></div>
+                        </div>
+                    </div>
+                </div>`;
+        }
+        else {
+            // Default Menu List Logic
+            (data.files || []).forEach((item, i) => {
+                let isSel = (parseInt(i) === parseInt(data.index));
+                let style = isSel ? 'background: #007bff; color: white; font-weight: bold; border-left: 8px solid yellow;' : 'color: #888;';
+                html += `<div id="item-${i}" class="menu-item" style="${style}">${item}</div>`;
+            });
+        }
+
+        menuContainer.innerHTML = html;
+
+        // 4. Scrolling Logic
+        if (data.mode !== "VOLUME" && data.mode !== "METRONOME") {
+            const active = document.getElementById(`item-${data.index}`);
+            if (active) active.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+    });
+
+    // Error logging for debugging
+    socket.on('connect_error', (err) => {
+        console.log("Connection Error: ", err.message);
+    });
+</script>
 </body>
 </html>
 """
@@ -175,5 +218,7 @@ def broadcast_loop():
 if __name__ == '__main__':
     if not os.path.exists(BASE_DIR):
         os.makedirs(BASE_DIR)
+    
     socketio.start_background_task(broadcast_loop)
-    socketio.run(app, host='0.0.0.0', port=5000)
+    # Added allow_unsafe_werkzeug for better stability on the Pi
+    socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
