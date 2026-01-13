@@ -838,8 +838,9 @@ def main():
                 update_web_state()
                 web_counter = 0
                 
-        time.sleep(0.05)
+        time.sleep(0.1)
 
 if __name__ == '__main__':
     load_mixer()
+
     main()
